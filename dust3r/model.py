@@ -180,18 +180,31 @@ class AsymmetricCroCo3DStereo(
         x = self.enc_norm(x)
         return x, pos, None
 
-    def _encode_image_pairs(self, img1, img2, true_shape1, true_shape2):
-        if img1.shape[-2:] == img2.shape[-2:]:
+    def _encode_image_pairs(self, *args):  # img1, img2, true_shape1, true_shape2):
+        # *args are made up of two sets of objects of identical length: images and shapes
+        objs_len = len(args) // 2
+        imgs = tuple(args[:objs_len])
+        true_shapes = tuple(args[objs_len:])
+        # if img1.shape[-2:] == img2.shape[-2:]:
+        if all(imgs[i].shape[-2:] == imgs[0].shape[-2:] for i in range(1, objs_len)):
             out, pos, _ = self._encode_image(
-                torch.cat((img1, img2), dim=0),
-                torch.cat((true_shape1, true_shape2), dim=0),
+                # torch.cat((img1, img2), dim=0),
+                torch.cat(imgs, dim=0),
+                # torch.cat((true_shape1, true_shape2), dim=0),
+                torch.cat(true_shapes, dim=0),
             )
-            out, out2 = out.chunk(2, dim=0)
-            pos, pos2 = pos.chunk(2, dim=0)
+            outs = out.chunk(objs_len, dim=0)
+            poss = pos.chunk(objs_len, dim=0)
         else:
-            out, pos, _ = self._encode_image(img1, true_shape1)
-            out2, pos2, _ = self._encode_image(img2, true_shape2)
-        return out, out2, pos, pos2
+            encoder_outputs = tuple(
+                self._encode_image(imgs[i], true_shapes[i]) for i in range(objs_len)
+            )
+            outs = tuple(encoder_outputs[i][0] for i in range(objs_len))
+            poss = tuple(encoder_outputs[i][1] for i in range(objs_len))
+            # out, pos, _ = self._encode_image(img1, true_shape1)
+            # out2, pos2, _ = self._encode_image(img2, true_shape2)
+        # return out, out2, pos, pos2
+        return *outs, *poss
 
     def _encode_symmetrized(self, *views):
         # img1 = view1["img"]
@@ -216,30 +229,47 @@ class AsymmetricCroCo3DStereo(
             feat1, feat2, pos1, pos2 = self._encode_image_pairs(
                 imgs[0][::2], imgs[1][::2], shapes[0][::2], shapes[1][::2]
             )
-            feat1, feat2 = interleave(feat1, feat2)
-            pos1, pos2 = interleave(pos1, pos2)
+            feats = tuple(interleave(feat1, feat2))
+            poss = tuple(interleave(pos1, pos2))
         else:
-            feat1, feat2, pos1, pos2 = self._encode_image_pairs(
-                imgs[0], imgs[1], shapes[0], shapes[1]
-            )
+            # feat1, feat2, pos1, pos2 = self._encode_image_pairs(
+            #     imgs[0], imgs[1], shapes[0], shapes[1]
+            # )
+            feats_poss = tuple(self._encode_image_pairs(*imgs, *shapes))
+            feats = feats_poss[: len(feats_poss) // 2]
+            poss = feats_poss[len(feats_poss) // 2 :]
 
-        return (shapes[0], shapes[1]), (feat1, feat2), (pos1, pos2)
+        return shapes, feats, poss
 
-    def _decoder(self, f1, pos1, f2, pos2):
-        final_output = [(f1, f2)]  # before projection
+    def _decoder(self, *f1_and_pos):  # f1, pos1, f2, pos2):
+        # f1_and_pos = (f1, pos1, f2, pos2, ..., fn, posn)
+        n = len(f1_and_pos) // 2
+        # final_output = [(f1, f2)]  # before projection
+        final_output = [tuple(f1_and_pos[2 * i] for i in range(n))]
 
         # project to decoder dim
-        f1 = self.decoder_embed(f1)
-        f2 = self.decoder_embed(f2)
+        # f1 = self.decoder_embed(f1)
+        # f2 = self.decoder_embed(f2)
+        fs = tuple(self.decoder_embed(f1_and_pos[2 * i]) for i in range(n))
 
-        final_output.append((f1, f2))
+        poss = tuple(f1_and_pos[2 * i + 1] for i in range(n))
+
+        # final_output.append((f1, f2))
+        final_output.append(fs)
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
             # img1 side
-            f1, _ = blk1(*final_output[-1][::+1], pos1, pos2)
+            f1 = deepcopy(final_output[-1][0])
+            for i in range(1, n):
+                f1, _ = blk1(f1, final_output[-1][i], poss[0], poss[i])
+            # f1, _ = blk1(*final_output[-1][::+1], poss[0], poss[1])
             # img2 side
-            f2, _ = blk2(*final_output[-1][::-1], pos2, pos1)
+            # f2, _ = blk2(*final_output[-1][::-1], poss[1], poss[0])
+            fns = tuple(
+                blk2(final_output[-1][i], final_output[-1][0], poss[i], poss[0])[0]
+                for i in range(1, n)
+            )
             # store the result
-            final_output.append((f1, f2))
+            final_output.append((f1, *fns))
 
         # normalize last output
         del final_output[1]  # duplicate with final_output[0]
@@ -258,15 +288,21 @@ class AsymmetricCroCo3DStereo(
         # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1, view2)
 
         # combine all ref images into object-centric representation
-        decs = self._decoder(*tuple(item for pair in zip(feats, poss) for item in pair))
-        dec1, dec2 = decs
+        decs = tuple(
+            self._decoder(*tuple(item for pair in zip(feats, poss) for item in pair))
+        )
+        # dec1, dec2 = decs
         # dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)
 
         with torch.amp.autocast("cuda", enabled=False):
-            res1 = self._downstream_head(1, [tok.float() for tok in dec1], shapes[0])
-            res2 = self._downstream_head(2, [tok.float() for tok in dec2], shapes[1])
+            res1 = self._downstream_head(1, [tok.float() for tok in decs[0]], shapes[0])
+            res2s = tuple(
+                self._downstream_head(2, [tok.float() for tok in decs[i]], shapes[i])
+                for i in range(1, len(decs))
+            )
 
-        res2["pts3d_in_other_view"] = res2.pop(
-            "pts3d"
-        )  # predict view2's pts3d in view1's frame
-        return res1, res2
+        for i in range(len(res2s)):
+            res2s[i]["pts3d_in_other_view"] = res2s[i].pop(
+                "pts3d"
+            )  # predict view2's pts3d in view1's frame
+        return res1, *res2s

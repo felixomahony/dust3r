@@ -1,0 +1,6 @@
+---
+name: laminated 012
+export_path: ./experiments/laminated_012/outputs/
+device: cpu
+image_folder: ./data
+image_order: coffee0.jpeg, coffee1.jpeg, coffee2.jpeg

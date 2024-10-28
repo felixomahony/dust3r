@@ -55,8 +55,13 @@ def loss_of_one_batch(
         with torch.amp.autocast("cuda", enabled=False):
             loss = criterion(*views, *preds) if criterion is not None else None
 
-    result = dict(
-        view1=views[0], view2=views[1], pred1=preds[0], pred2=preds[1], loss=loss
+    # result = dict(
+    #     view1=views[0], view2=views[1], pred1=preds[0], pred2=preds[1], loss=loss
+    # )
+    result = (
+        {f"view{i+1}": views[i] for i in range(len(views))}
+        | {f"pred{i+1}": preds[i] for i in range(len(preds))}
+        | {"loss": loss}
     )
     return result[ret] if ret else result
 

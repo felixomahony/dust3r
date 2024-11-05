@@ -7,6 +7,9 @@ import functools
 import os
 import yaml
 import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.gridspec import GridSpec
+import cv2
 
 
 def load_config(config_path):
@@ -144,8 +147,10 @@ def main(
         image_order = image_order.split(",")
         image_order = [img.replace(" ", "") for img in image_order]
         image_list_names = [img.split("/")[-1].replace(" ", "") for img in image_list]
-        if set(image_order) != set(image_list_names):
-            raise ValueError("Image order does not match image list")
+        # check image order is a subset of image_list_names
+        assert set(image_order).issubset(
+            set(image_list_names)
+        ), f"Image order contains invalid names: {set(image_order) - set(image_list_names)}"
         image_list = [image_list[image_list_names.index(img)] for img in image_order]
         print("Image order set to: ", image_list)
     else:
@@ -184,15 +189,47 @@ def main(
     for i in range(num_images):
         key = "pts3d" if i == 0 else "pts3d_in_other_view"
         depth = out_data[f"pred{i+1}"][key][0, :, :, -1].detach().cpu().numpy()
-        mx_depth = depth.max()
-        mn_depth = depth.min()
+        conf = out_data[f"pred{i+1}"]["conf"].detach().cpu().numpy().squeeze()
+        mx_depth = np.percentile(depth, 90)
+        mn_depth = np.percentile(depth, 10)
         depth = (depth - mn_depth) / (mx_depth - mn_depth)
 
+        gs = GridSpec(2, num_images * 2, height_ratios=[num_images, 2])
+
         # save depth map
-        plt.imshow(depth, cmap="hsv")
-        plt.axis("off")
-        plt.title(f"{name}: Depth Map {i}")
+        ax_depth = plt.subplot(gs[0, :num_images])
+        ax_depth.imshow(depth, cmap="hsv", vmin=0, vmax=1)
+        ax_depth.axis("off")
+        ax_depth.set_title(f"depth {i}")
+
+        # save confidence map
+        ax_conf = plt.subplot(gs[0, num_images:])
+        ax_conf.imshow(conf, cmap="bwr", vmin=0, vmax=25)
+        ax_conf.axis("off")
+        ax_conf.set_title(f"confidence {i}")
+
+        # save reference images
+        for j in range(num_images):
+            im = cv2.imread(image_list[j])
+            if j == 0:
+                cv2.rectangle(
+                    im,
+                    (0, 0),
+                    (im.shape[1], im.shape[0]),
+                    (0, 0, 255),
+                    10,
+                )
+            im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)
+            ax_ref = plt.subplot(gs[1, 2 * j : 2 * j + 2])
+            ax_ref.imshow(im)
+            ax_ref.axis("off")
+
+        plt.suptitle(name)
+        plt.tight_layout()
         plt.savefig(os.path.join(export_path, f"depth_map_{i}.png"))
+
+        plt.clf()
+        plt.close()
 
         # save point cloud
         pts3d = out_data[f"pred{i+1}"][key][0].detach().cpu().numpy()
@@ -203,12 +240,13 @@ def main(
                 f.write(f"v {pt[0]} {pt[1]} {pt[2]}\n")
             for i in range(pts3d.shape[0] - 1):
                 for j in range(pts3d.shape[1] - 1):
-                    f.write(
-                        f"f {i*pts3d.shape[1]+j+1} {i*pts3d.shape[1]+j+2} {(i+1)*pts3d.shape[1]+j+2}\n"
-                    )
-                    f.write(
-                        f"f {i*pts3d.shape[1]+j+1} {(i+1)*pts3d.shape[1]+j+2} {(i+1)*pts3d.shape[1]+j+1}\n"
-                    )
+                    if conf[i, j] > 3 or True:
+                        f.write(
+                            f"f {i*pts3d.shape[1]+j+1} {i*pts3d.shape[1]+j+2} {(i+1)*pts3d.shape[1]+j+2}\n"
+                        )
+                        f.write(
+                            f"f {i*pts3d.shape[1]+j+1} {(i+1)*pts3d.shape[1]+j+2} {(i+1)*pts3d.shape[1]+j+1}\n"
+                        )
 
 
 if __name__ == "__main__":

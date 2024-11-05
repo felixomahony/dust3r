@@ -1,7 +1,0 @@
----
-name: not laminated 01
-export_path: ./experiments/non_laminated_01/outputs/
-device: cpu
-image_folder: ./data
-exclude_imgs: coffee2.jpeg
-image_order: coffee0.jpeg, coffee1.jpeg

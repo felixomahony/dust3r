@@ -258,12 +258,19 @@ class AsymmetricCroCo3DStereo(
         final_output.append(fs)
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
             # img1 side
-            f1 = deepcopy(final_output[-1][0])
-            for i in range(1, n):
-                f1, _ = blk1(f1, final_output[-1][i], poss[0], poss[i])
+
+            # f1 = deepcopy(final_output[-1][0])
+            # f1s = []
+            # for i in range(1, n):
+            #     f1_, _ = blk1(f1, final_output[-1][i], poss[0], poss[i])
+            #     f1s.append(f1_)
+            # f1 = sum(f1s) / len(f1s)
+
             # f1, _ = blk1(*final_output[-1][::+1], poss[0], poss[1])
             # img2 side
             # f2, _ = blk2(*final_output[-1][::-1], poss[1], poss[0])
+
+            f1, _ = blk1(final_output[-1][0], final_output[-1][1:], poss[0], poss[1:])
             fns = tuple(
                 blk2(final_output[-1][i], final_output[-1][0], poss[i], poss[0])[0]
                 for i in range(1, n)

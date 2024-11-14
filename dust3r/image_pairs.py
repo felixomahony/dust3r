@@ -8,8 +8,14 @@ import numpy as np
 import torch
 
 
-def make_pairs(imgs, scene_graph="complete", prefilter=None, symmetrize=True):
+def make_pairs(
+    imgs, scene_graph="complete", prefilter=None, symmetrize=True, laminate=False
+):
     pairs = []
+    # if we laminate, then simply return all images
+    if laminate:
+        return (tuple(imgs),)
+
     if scene_graph == "complete":  # complete graph
         for i in range(len(imgs)):
             for j in range(i):

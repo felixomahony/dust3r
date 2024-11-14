@@ -32,7 +32,7 @@ def load_config(config_path):
     type=click.Path(),
     required=False,
     help="Config file",
-    default=None,
+    default="./experiments/church/laminated/config.yaml",
 )
 @click.option(
     "--name",

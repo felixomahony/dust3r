@@ -241,7 +241,7 @@ class AsymmetricCroCo3DStereo(
 
         return shapes, feats, poss
 
-    def _decoder(self, *f1_and_pos):  # f1, pos1, f2, pos2):
+    def _decoder(self, *f1_and_pos, return_attention=False):  # f1, pos1, f2, pos2):
         # f1_and_pos = (f1, pos1, f2, pos2, ..., fn, posn)
         n = len(f1_and_pos) // 2
         # final_output = [(f1, f2)]  # before projection
@@ -256,21 +256,18 @@ class AsymmetricCroCo3DStereo(
 
         # final_output.append((f1, f2))
         final_output.append(fs)
+
+        attn_flag = return_attention
         for blk1, blk2 in zip(self.dec_blocks, self.dec_blocks2):
-            # img1 side
-
-            # f1 = deepcopy(final_output[-1][0])
-            # f1s = []
-            # for i in range(1, n):
-            #     f1_, _ = blk1(f1, final_output[-1][i], poss[0], poss[i])
-            #     f1s.append(f1_)
-            # f1 = sum(f1s) / len(f1s)
-
-            # f1, _ = blk1(*final_output[-1][::+1], poss[0], poss[1])
-            # img2 side
-            # f2, _ = blk2(*final_output[-1][::-1], poss[1], poss[0])
-
-            f1, _ = blk1(final_output[-1][0], final_output[-1][1:], poss[0], poss[1:])
+            f1, _ = blk1(
+                final_output[-1][0],
+                final_output[-1][1:],
+                poss[0],
+                poss[1:],
+                return_attention=attn_flag,
+            )
+            if attn_flag:
+                f1, attn = f1
             fns = tuple(
                 blk2(final_output[-1][i], final_output[-1][0], poss[i], poss[0])[0]
                 for i in range(1, n)
@@ -278,9 +275,14 @@ class AsymmetricCroCo3DStereo(
             # store the result
             final_output.append((f1, *fns))
 
+            attn_flag = False  # only return attention for the first block
+
         # normalize last output
         del final_output[1]  # duplicate with final_output[0]
         final_output[-1] = tuple(map(self.dec_norm, final_output[-1]))
+
+        if return_attention:
+            return zip(*final_output), attn
         return zip(*final_output)
 
     def _downstream_head(self, head_num, decout, img_shape):
